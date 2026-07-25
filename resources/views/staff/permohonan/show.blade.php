@@ -53,7 +53,7 @@
                     <tr class="bg-gray-50 border-b">
                         <th class="p-3 text-sm font-semibold text-gray-600">No</th>
                         <th class="p-3 text-sm font-semibold text-gray-600">Nama Dokumen</th>
-                        <th class="p-3 text-sm font-semibold text-gray-600">Status</th>
+                        <th class="p-3 text-sm font-semibold text-gray-600">Status OCR</th>
                         <th class="p-3 text-sm font-semibold text-gray-600 text-center">Aksi</th>
                     </tr>
                 </thead>
@@ -62,11 +62,15 @@
                         <td class="p-3 text-sm">1</td>
                         <td class="p-3 text-sm font-medium text-gray-800" id="namaFileDokumen">Berkas_Persyaratan_{{ str_replace(' ', '_', $permohonan->client->name) }}.pdf</td>
                         <td class="p-3 text-sm">
-                            <span id="statusOcr" class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-md font-semibold">Belum Diproses</span>
+                            @if($permohonan->ocr_status === 'terverifikasi')
+                                <span id="statusOcr" class="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-md font-semibold">✓ Terverifikasi</span>
+                            @else
+                                <span id="statusOcr" class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-md font-semibold">Belum Diproses</span>
+                            @endif
                         </td>
                         <td class="p-3 text-center">
                             <button type="button" onclick="mulaiProsesOcr()" id="btnProsesOcr" class="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded shadow-sm hover:bg-gray-50 text-sm font-medium transition">
-                                Proses OCR
+                                {{ $permohonan->ocr_status === 'terverifikasi' ? 'Proses Ulang' : 'Proses OCR' }}
                             </button>
                         </td>
                     </tr>
@@ -81,7 +85,7 @@
     <div id="modalProgressOcr" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-50 transition-opacity">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl overflow-hidden">
             <div class="p-4 border-b bg-gray-50">
-                <h3 class="text-lg font-semibold text-gray-800">Proses OCR - <span id="judulProgress">Berkas_Persyaratan_{{ str_replace(' ', '_', $permohonan->client->name) }}.pdf</span></h3>
+                <h3 class="text-lg font-semibold text-gray-800">Proses OCR — <span id="judulProgress">Berkas_Persyaratan_{{ str_replace(' ', '_', $permohonan->client->name) }}.pdf</span></h3>
             </div>
             <div class="p-6 flex flex-row gap-6">
                 <div class="w-1/3 bg-gray-100 rounded flex flex-col items-center justify-center border border-gray-200 min-h-[200px]">
@@ -99,10 +103,10 @@
     <!-- ========================================== -->
     <!-- MODAL 2: TINJAUAN & VERIFIKASI DATA (HITL) -->
     <!-- ========================================== -->
-    <div id="modalReviewOcr" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-50 transition-opacity">
-        <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl overflow-hidden h-[90vh] flex flex-col">
+    <div id="modalReviewOcr" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-50 transition-opacity p-4">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-7xl overflow-hidden h-[92vh] flex flex-col">
             <div class="p-4 border-b flex justify-between items-center bg-gray-50">
-                <h3 class="text-lg font-bold text-gray-800">Tinjauan Data Terpusat</h3>
+                <h3 class="text-lg font-bold text-gray-800">Tinjauan & Verifikasi Data OCR</h3>
                 <button type="button" onclick="tutupModalReview()" class="text-gray-400 hover:text-gray-600 text-xl font-bold">&times;</button>
             </div>
             
@@ -137,187 +141,309 @@
 
 @push('scripts')
 <script>
-    const pathLokalPdf = "{!! $permohonan->file_path !!}"; 
-    const csrfToken = "{{ csrf_token() }}";
-    
-    // Menjadi objek kosong, bukan objek dengan NIK/Nama statis
-    let kumpulanDataOcr = {};
+    const pathLokalPdf   = "{!! $permohonan->file_path !!}";
+    const csrfToken      = "{{ csrf_token() }}";
+    const permohonanId   = {{ $permohonan->id }};
+    const saveUrl        = "{{ route('ocr.save') }}";
 
+    let kumpulanDataOcr  = {};
+
+    // ======================================================================
+    // TOAST NOTIFICATION
+    // ======================================================================
+    function tampilkanToast(pesan, tipe = 'success') {
+        const existing = document.getElementById('ocrToast');
+        if (existing) existing.remove();
+
+        const warna   = tipe === 'success' ? 'bg-green-600' : 'bg-red-600';
+        const ikon    = tipe === 'success' ? '✓' : '✗';
+        const toast   = document.createElement('div');
+        toast.id      = 'ocrToast';
+        toast.className = `fixed bottom-6 right-6 z-[9999] flex items-center gap-3 px-5 py-3 rounded-lg shadow-lg text-white text-sm font-medium ${warna} transition-all duration-300 opacity-0`;
+        toast.innerHTML = `<span class="text-base font-bold">${ikon}</span><span>${pesan}</span>`;
+        document.body.appendChild(toast);
+
+        requestAnimationFrame(() => { toast.style.opacity = '1'; });
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            setTimeout(() => toast.remove(), 400);
+        }, 3500);
+    }
+
+    // ======================================================================
+    // MULAI PROSES OCR — 1 Berkas = 1 Request ke Gemini
+    // ======================================================================
     async function mulaiProsesOcr() {
+        const btn           = document.getElementById('btnProsesOcr');
         const modalProgress = document.getElementById('modalProgressOcr');
+        const containerBar  = document.getElementById('containerProgressBar');
+
+        btn.disabled  = true;
+        btn.innerText = 'Memproses...';
         modalProgress.classList.remove('hidden');
         modalProgress.classList.add('flex');
-        const containerBar = document.getElementById('containerProgressBar');
-        containerBar.innerHTML = '<p class="text-sm text-gray-500">Menghitung jumlah halaman...</p>'; 
-        
-        // Reset data OCR untuk proses baru
         kumpulanDataOcr = {};
-        
+
+        // Tampilkan UI loading animasi (bukan per-halaman lagi)
+        containerBar.innerHTML = `
+            <div class="flex flex-col items-center justify-center py-6 gap-4">
+                <div class="relative w-16 h-16">
+                    <div class="absolute inset-0 rounded-full border-4 border-blue-200"></div>
+                    <div class="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
+                </div>
+                <div class="text-center">
+                    <p class="text-sm font-semibold text-gray-700" id="statusOcrText">
+                        Mengirim seluruh dokumen ke Gemini Vision AI...
+                    </p>
+                    <p class="text-xs text-gray-400 mt-1" id="subStatusOcrText">
+                        Semua halaman diproses sekaligus dalam 1 request
+                    </p>
+                </div>
+                <div id="timerDisplay" class="text-xs text-gray-400"></div>
+            </div>`;
+
+        // Tampilkan timer berjalan
+        let elapsed   = 0;
+        const timerEl = document.getElementById('timerDisplay');
+        const timer   = setInterval(() => {
+            elapsed++;
+            if (timerEl) timerEl.innerText = `⏱ ${elapsed}s berlalu...`;
+            // Update pesan sesuai progress waktu
+            const statusEl = document.getElementById('statusOcrText');
+            if (statusEl) {
+                if (elapsed < 10)       statusEl.innerText = 'Mengirim seluruh dokumen ke Gemini Vision AI...';
+                else if (elapsed < 30)  statusEl.innerText = 'Gemini sedang menganalisis semua halaman...';
+                else if (elapsed < 60)  statusEl.innerText = 'Mengekstrak data dari tiap dokumen...';
+                else                    statusEl.innerText = 'Hampir selesai, menyusun hasil ekstraksi...';
+            }
+        }, 1000);
+
         try {
-            // 1. Minta Backend Menghitung Total Halaman
-            const reqCount = await fetch("{{ route('ocr.count') }}", {
+            // Timeout 3 menit — proses multi-gambar butuh lebih lama
+            const controller = new AbortController();
+            const timeoutId  = setTimeout(() => controller.abort(), 180000);
+
+            const req = await fetch("{{ route('ocr.processDocument') }}", {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
-                body: JSON.stringify({ file_path: pathLokalPdf }) 
+                body: JSON.stringify({ file_path: pathLokalPdf }),
+                signal: controller.signal,
             });
-            const resCount = await reqCount.json();
+            clearTimeout(timeoutId);
+            clearInterval(timer);
 
-            if(resCount.status !== 'success') throw new Error(resCount.message);
-
-            const totalHalaman = resCount.total_pages;
-            containerBar.innerHTML = ''; // Bersihkan loading
-
-            // Siapkan UI Progress Bar
-            for(let i=1; i<=totalHalaman; i++) {
-                containerBar.innerHTML += `
-                    <div id="progressItem_${i}" class="flex flex-col mb-2 opacity-50">
-                        <div class="flex justify-between text-xs mb-1">
-                            <span class="font-medium text-gray-600" id="textProgress_${i}">Halaman ${i} - Menunggu...</span>
-                        </div>
-                        <div class="w-full bg-gray-200 rounded-full h-2">
-                            <div id="barProgress_${i}" class="bg-blue-600 h-2 rounded-full transition-all duration-500 w-0"></div>
-                        </div>
-                    </div>
-                `;
+            // Cek content-type
+            const contentType = req.headers.get('Content-Type') || '';
+            if (!contentType.includes('application/json')) {
+                const htmlText = await req.text();
+                console.error('Server kembalikan non-JSON:', htmlText.substring(0, 300));
+                throw new Error(`Server error (HTTP ${req.status}). Cek log Laravel.`);
             }
 
-            // 2. Mulai Looping Ekstraksi per Halaman
-            await jalankanEkstraksiBeruntun(1, totalHalaman);
+            const res = await req.json();
 
-        } catch (error) {
-            alert("Gagal memproses OCR: " + error.message);
-            modalProgress.classList.add('hidden');
-            modalProgress.classList.remove('flex');
-        }
-    }
+            if (res.status === 'success') {
+                kumpulanDataOcr = res.data || {};
+                const totalDocs = Object.keys(kumpulanDataOcr).length;
+                const totalHal  = res.total_pages || '?';
 
-    async function jalankanEkstraksiBeruntun(halaman, total) {
-        if (halaman > total) {
-            // Jika semua halaman selesai, buka modal review
+                containerBar.innerHTML = `
+                    <div class="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-lg">
+                        <span class="text-2xl">✅</span>
+                        <div>
+                            <p class="text-sm font-semibold text-green-700">Ekstraksi selesai dalam ${elapsed}s</p>
+                            <p class="text-xs text-green-600 mt-0.5">
+                                ${totalHal} halaman diproses • ${totalDocs} jenis dokumen ditemukan dalam 1 request API
+                            </p>
+                        </div>
+                    </div>`;
+
+                setTimeout(() => {
+                    modalProgress.classList.add('hidden');
+                    modalProgress.classList.remove('flex');
+                    bukaModalReview();
+                }, 1200);
+            } else {
+                throw new Error(res.message || 'Respon error dari server.');
+            }
+
+        } catch (e) {
+            clearInterval(timer);
+            const errMsg  = e.name === 'AbortError' ? 'Timeout (>3 menit)' : e.message;
+            const is429   = errMsg.includes('429') || errMsg.includes('Rate limit') || errMsg.includes('quota');
+
+            containerBar.innerHTML = `
+                <div class="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <span class="text-2xl">❌</span>
+                    <div>
+                        <p class="text-sm font-semibold text-red-700">Gagal memproses dokumen</p>
+                        <p class="text-xs text-red-500 mt-0.5">${errMsg}</p>
+                        ${is429 ? '<p class="text-xs text-orange-600 mt-1">💡 Kuota RPD habis. Coba besok jam 14.00 WIB atau isi GEMINI_OCR_API_KEY dengan key akun Google lain.</p>' : ''}
+                    </div>
+                </div>`;
+
             setTimeout(() => {
-                const modalProgress = document.getElementById('modalProgressOcr');
                 modalProgress.classList.add('hidden');
                 modalProgress.classList.remove('flex');
-                bukaModalReview();
-            }, 800);
-            return;
+                btn.disabled  = false;
+                btn.innerText = 'Proses OCR';
+            }, 4000);
         }
-
-        // Animasi Sedang Memproses
-        document.getElementById(`progressItem_${halaman}`).classList.remove('opacity-50');
-        document.getElementById(`textProgress_${halaman}`).innerText = `Halaman ${halaman} - Mengekstrak...`;
-        document.getElementById(`textProgress_${halaman}`).classList.add('text-blue-600');
-        document.getElementById(`barProgress_${halaman}`).style.width = '50%';
-
-        try {
-            // Tembak API Proses Halaman
-            const requestOcr = await fetch("{{ route('ocr.process') }}", {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
-                body: JSON.stringify({ file_path: pathLokalPdf, page_number: halaman })
-            });
-            const responseOcr = await requestOcr.json();
-
-            if(responseOcr.status === 'success') {
-                // ==========================================
-                // LOGIKA BARU: MENGGABUNGKAN DATA DINAMIS
-                // ==========================================
-                const foundDocs = responseOcr.data;
-                for (const [docName, fields] of Object.entries(foundDocs)) {
-                    if (!kumpulanDataOcr[docName]) {
-                        kumpulanDataOcr[docName] = {};
-                    }
-                    // Gabungkan semua field (KTP, NPWP, dll) yang ditemukan
-                    Object.assign(kumpulanDataOcr[docName], fields);
-                }
-
-                // Animasi Sukses
-                document.getElementById(`textProgress_${halaman}`).innerText = `Halaman ${halaman} - Selesai`;
-                document.getElementById(`textProgress_${halaman}`).classList.replace('text-blue-600', 'text-green-600');
-                document.getElementById(`barProgress_${halaman}`).classList.replace('bg-blue-600', 'bg-green-500');
-                document.getElementById(`barProgress_${halaman}`).style.width = '100%';
-            } else {
-                throw new Error(responseOcr.message);
-            }
-        } catch(e) {
-            document.getElementById(`textProgress_${halaman}`).innerText = `Halaman ${halaman} - Error/Lewati`;
-            document.getElementById(`textProgress_${halaman}`).classList.replace('text-blue-600', 'text-red-500');
-            document.getElementById(`barProgress_${halaman}`).classList.replace('bg-blue-600', 'bg-red-500');
-        }
-
-        // Lanjut proses halaman berikutnya secara sekuensial
-        await jalankanEkstraksiBeruntun(halaman + 1, total);
     }
 
+    // ======================================================================
+    // BUKA MODAL REVIEW — dengan highlight field kosong
+    // ======================================================================
     function bukaModalReview() {
         const modalReview = document.getElementById('modalReviewOcr');
         modalReview.classList.remove('hidden');
         modalReview.classList.add('flex');
-        
-        // Membuka PDF menggunakan route view.pdf agar tidak 403
-        document.getElementById('pdfViewerFrame').src = "{{ route('view.pdf') }}?path=" + encodeURIComponent(pathLokalPdf);
+        document.getElementById('pdfViewerFrame').src = "{{ route('view.pdf') }}?path=" + encodeURIComponent(pathLokalPdf) + "#navpanes=0&view=FitH";
 
-        // ==========================================
-        // MENGGAMBAR FORM HTML SECARA DINAMIS
-        // ==========================================
         const container = document.getElementById('dynamicFormContainer');
-        container.innerHTML = ''; // Kosongkan form sebelumnya
+        container.innerHTML = '';
 
-        // Validasi jika tidak ada dokumen yang terdeteksi
         if (Object.keys(kumpulanDataOcr).length === 0) {
-            container.innerHTML = '<p class="text-sm text-red-500 font-semibold p-4 border border-red-200 bg-red-50 rounded-lg">Tidak ada format dokumen (KTP/KK/NPWP/Sertifikat/dll) yang berhasil dikenali dalam file PDF ini.</p>';
+            container.innerHTML = `
+                <div class="flex items-start gap-3 p-4 border border-red-200 bg-red-50 rounded-lg">
+                    <span class="text-red-500 text-xl">⚠</span>
+                    <div>
+                        <p class="text-sm font-semibold text-red-700">Tidak ada dokumen yang dikenali</p>
+                        <p class="text-xs text-red-500 mt-1">Dokumen AJB yang didukung: KTP, Kartu Keluarga, Buku Nikah, Sertifikat Tanah (SHM/HGB), SPPT PBB, Bukti Lunas PBB (STTS), NPWP, Surat Persetujuan Suami/Istri.</p>
+                    </div>
+                </div>`;
             return;
         }
 
-        // Looping untuk membuat UI kategori dokumen
-        for (const [docName, fields] of Object.entries(kumpulanDataOcr)) {
-            let formHtml = `
-                <div class="bg-gray-50 border border-gray-200 rounded-lg p-5 mb-5 shadow-sm">
-                    <h4 class="text-sm font-bold text-blue-800 uppercase tracking-wider mb-4 border-b border-blue-200 pb-2">Data ${docName}</h4>
-                    <div class="space-y-4">
-            `;
+        // Hitung jumlah field kosong untuk summary
+        let totalField = 0, fieldKosong = 0;
 
-            // Looping untuk membuat input teks per field
+        for (const [docName, fields] of Object.entries(kumpulanDataOcr)) {
+            let fieldHtml = '';
             for (const [fieldName, value] of Object.entries(fields)) {
-                // Membuat ID unik yang aman dari karakter aneh
-                const inputId = `input_${docName.replace(/\s+/g, '_')}_${fieldName.replace(/[^a-zA-Z0-9]/g, '_')}`;
-                
-                formHtml += `
+                totalField++;
+                const isEmpty    = !value || value.toString().trim() === '';
+                if (isEmpty) fieldKosong++;
+
+                const inputId    = `input_${docName.replace(/\s+/g, '_')}_${fieldName.replace(/[^a-zA-Z0-9]/g, '_')}`;
+                const borderCls  = isEmpty
+                    ? 'border-red-400 bg-red-50 focus:ring-red-400 focus:border-red-400'
+                    : 'border-gray-300 bg-white focus:ring-blue-500 focus:border-blue-500';
+                const warningBadge = isEmpty
+                    ? `<span class="ml-2 text-xs font-semibold text-red-500 bg-red-100 px-1.5 py-0.5 rounded">Perlu diisi manual</span>`
+                    : '';
+
+                const safeValue = (value || '').toString()
+                    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                const isLongText = fieldName.includes('Daftar') || 
+                                   fieldName.includes('Kesimpulan') || 
+                                   fieldName.includes('Waris') || 
+                                   safeValue.length > 60 || 
+                                   safeValue.includes('\n');
+
+                const lineCount  = safeValue.split('\n').length;
+                const dynamicRows = Math.min(12, Math.max(5, lineCount + 1));
+
+                const inputControl = isLongText
+                    ? `<textarea id="${inputId}"
+                        name="ocr_data[${docName}][${fieldName}]"
+                        rows="${dynamicRows}"
+                        class="w-full px-3 py-2 border ${borderCls} rounded text-sm transition-colors font-sans whitespace-pre-wrap leading-relaxed"
+                        oninput="this.classList.remove('border-red-400','bg-red-50'); this.classList.add('border-green-400','bg-green-50');">${safeValue}</textarea>`
+                    : `<input type="text"
+                        id="${inputId}"
+                        name="ocr_data[${docName}][${fieldName}]"
+                        value="${safeValue}"
+                        class="w-full px-3 py-2 border ${borderCls} rounded text-sm transition-colors"
+                        oninput="this.classList.remove('border-red-400','bg-red-50'); this.classList.add('border-green-400','bg-green-50');">`;
+
+                fieldHtml += `
                     <div>
-                        <label class="block text-xs font-semibold text-gray-700 mb-1">${fieldName}</label>
-                        <input type="text" id="${inputId}" name="ocr_data[${docName}][${fieldName}]" value="${value || ''}" class="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:ring-blue-500 focus:border-blue-500 bg-white transition-colors">
-                    </div>
-                `;
+                        <label class="flex items-center text-xs font-semibold text-gray-700 mb-1">
+                            ${fieldName}${warningBadge}
+                        </label>
+                        ${inputControl}
+                    </div>`;
             }
 
-            formHtml += `</div></div>`;
-            container.innerHTML += formHtml; // Suntikkan HTML ke dalam kontainer
+            container.innerHTML += `
+                <div class="bg-gray-50 border border-gray-200 rounded-lg p-5 mb-5 shadow-sm">
+                    <h4 class="text-sm font-bold text-blue-800 uppercase tracking-wider mb-4 border-b border-blue-200 pb-2">
+                        📄 Data ${docName}
+                    </h4>
+                    <div class="space-y-4">${fieldHtml}</div>
+                </div>`;
         }
+
+        // Tampilkan summary kelengkapan di atas form
+        const pctOk  = Math.round(((totalField - fieldKosong) / totalField) * 100);
+        const summCls = pctOk >= 80 ? 'bg-green-50 border-green-200 text-green-700'
+                       : pctOk >= 50 ? 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                       : 'bg-red-50 border-red-200 text-red-700';
+        const summHtml = `
+            <div class="flex items-center justify-between p-3 mb-4 border rounded-lg text-xs font-medium ${summCls}">
+                <span>📊 Kelengkapan data: ${totalField - fieldKosong}/${totalField} field terisi (${pctOk}%)</span>
+                ${fieldKosong > 0 ? `<span>${fieldKosong} field perlu diisi manual</span>` : '<span>✓ Semua field terisi</span>'}
+            </div>`;
+        container.insertAdjacentHTML('afterbegin', summHtml);
     }
 
+    // ======================================================================
+    // TUTUP MODAL
+    // ======================================================================
     function tutupModalReview() {
-        const modalReview = document.getElementById('modalReviewOcr');
-        modalReview.classList.add('hidden');
-        modalReview.classList.remove('flex');
-        document.getElementById('pdfViewerFrame').src = ''; 
+        document.getElementById('modalReviewOcr').classList.add('hidden');
+        document.getElementById('modalReviewOcr').classList.remove('flex');
+        document.getElementById('pdfViewerFrame').src = '';
     }
 
+    // ======================================================================
+    // SIMPAN DATA TERVERIFIKASI — kirim ke backend dan simpan ke database
+    // ======================================================================
     async function simpanDataTerverifikasi() {
-        // Ambil data dinamis dari form menggunakan FormData
         const formElement = document.getElementById('formVerifikasiOcr');
-        if (!formElement) {
-            console.error('Form Verifikasi OCR tidak ditemukan.');
-            return;
+        if (!formElement) return;
+
+        const ocrData = {};
+        formElement.querySelectorAll('input[name^="ocr_data"]').forEach(input => {
+            const match = input.name.match(/ocr_data\[([^\]]+)\]\[([^\]]+)\]/);
+            if (match) {
+                const [, docName, fieldName] = match;
+                if (!ocrData[docName]) ocrData[docName] = {};
+                ocrData[docName][fieldName] = input.value;
+            }
+        });
+
+        const btnSimpan = document.querySelector('[onclick="simpanDataTerverifikasi()"]');
+        const textAsli  = btnSimpan ? btnSimpan.innerText : '';
+        if (btnSimpan) { btnSimpan.disabled = true; btnSimpan.innerText = 'Menyimpan...'; }
+
+        try {
+            const response = await fetch(saveUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrfToken },
+                body: JSON.stringify({ permohonan_id: permohonanId, ocr_data: ocrData }),
+            });
+            const result = await response.json();
+
+            if (result.status === 'success') {
+                tutupModalReview();
+                const statusBadge = document.getElementById('statusOcr');
+                if (statusBadge) {
+                    statusBadge.innerText  = '✓ Terverifikasi';
+                    statusBadge.className  = 'px-2 py-1 bg-green-100 text-green-700 text-xs rounded-md font-semibold';
+                }
+                const btnOcr = document.getElementById('btnProsesOcr');
+                if (btnOcr) { btnOcr.innerText = 'Proses Ulang'; btnOcr.disabled = false; }
+                tampilkanToast('Data OCR berhasil disimpan ke database!', 'success');
+            } else {
+                throw new Error(result.message || 'Terjadi kesalahan pada server.');
+            }
+        } catch (e) {
+            tampilkanToast('Gagal menyimpan: ' + e.message, 'error');
+            if (btnSimpan) { btnSimpan.disabled = false; btnSimpan.innerText = textAsli; }
         }
-        const formData = new window.FormData(formElement);
-        
-        // Console.log untuk melihat struktur data yang dikumpulkan (opsional)
-        console.log("Data siap dikirim ke database: ", Object.fromEntries(formData.entries()));
-        
-        tutupModalReview();
-        document.getElementById('statusOcr').innerText = 'Selesai (Terverifikasi)';
-        document.getElementById('statusOcr').className = 'px-2 py-1 bg-green-100 text-green-700 text-xs rounded-md font-semibold';
-        alert('Validasi selesai. Data siap digunakan dan disimpan.');
     }
 </script>
 @endpush

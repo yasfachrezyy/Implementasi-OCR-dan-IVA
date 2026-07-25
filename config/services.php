@@ -35,4 +35,18 @@ return [
         ],
     ],
 
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY', ''),
+    ],
+
+    // Key khusus IVA — dari Akun Google 1
+    'gemini_iva' => [
+        'key' => env('GEMINI_IVA_API_KEY') ?: env('GEMINI_API_KEY', ''),
+    ],
+
+    // Key khusus OCR — dari Akun Google 2
+    'gemini_ocr' => [
+        'key' => env('GEMINI_OCR_API_KEY') ?: env('GEMINI_API_KEY', ''),
+    ],
+
 ];

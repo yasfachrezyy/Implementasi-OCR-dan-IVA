@@ -13,8 +13,9 @@ class GeminiGenerationService
 
     public function __construct()
     {
-        $this->apiKey = env('GEMINI_API_KEY');
-        $model = 'gemini-2.5-flash'; 
+        // Gunakan key khusus IVA jika ada, fallback ke key umum
+        $this->apiKey = env('GEMINI_IVA_API_KEY') ?: env('GEMINI_API_KEY', '');
+        $model = env('GEMINI_IVA_MODEL', 'gemini-2.5-flash-lite'); 
         
         $this->apiUrl = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$this->apiKey}";
     }

@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Klien;
 
 use App\Http\Controllers\Controller;
 use App\Models\Permohonan;
-use App\Models\Service; 
+use App\Models\Service;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
@@ -25,7 +25,7 @@ class PermohonanKlienController extends Controller
     public function create()
     {
         $allServices = Service::orderBy('name', 'asc')->get();
-        
+
         $groupedServices = $allServices->groupBy('type');
 
         $servicesMap = $allServices->mapWithKeys(function ($service) {
@@ -45,8 +45,8 @@ class PermohonanKlienController extends Controller
             'nama_pihak_pertama' => 'required|string|max:255',
             'nama_pihak_kedua' => 'nullable|string|max:255',
             'keterangan_tambahan' => 'nullable|string',
-            'berkas_pengajuan' => 'required|file|mimes:pdf,zip|max:10240', 
-            
+            'berkas_pengajuan' => 'required|file|mimes:pdf,zip|max:20240',
+
             'harga_aset' => [
                 Rule::requiredIf(function () use ($request) {
                     $service = Service::find($request->service_id);
@@ -54,7 +54,7 @@ class PermohonanKlienController extends Controller
                 }),
                 'nullable', 'numeric', 'min:0'
             ],
-            
+
             'nop' => 'nullable|string|max:50',
         ]);
 
@@ -88,7 +88,7 @@ class PermohonanKlienController extends Controller
         abort_if($permohonan->client_id !== auth()->id(), 403);
 
         $request->validate([
-            'berkas_pengajuan_baru' => 'required|file|mimes:pdf,zip|max:10240', 
+            'berkas_pengajuan_baru' => 'required|file|mimes:pdf,zip|max:10240',
         ]);
 
         Storage::disk('public')->delete($permohonan->file_path);
@@ -106,7 +106,7 @@ class PermohonanKlienController extends Controller
     public function showSyaratInformasi()
     {
         $allServices = \App\Models\Service::orderBy('type')->orderBy('name')->get();
- 
+
         $groupedServices = $allServices->groupBy('type');
 
         $servicesMap = $allServices->keyBy('id');

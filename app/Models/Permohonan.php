@@ -20,6 +20,12 @@ class Permohonan extends Model
         'file_path',
         'status',
         'notes',
+        'ocr_result',
+        'ocr_status',
+    ];
+
+    protected $casts = [
+        'ocr_result' => 'array',
     ];
 
     // Relasi ke model User (Klien)

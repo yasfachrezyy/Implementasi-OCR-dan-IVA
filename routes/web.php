@@ -66,6 +66,7 @@ Route::post('/iva/send-message', [IvaController::class, 'sendMessage'])->name('i
 
 Route::post('/ocr/hitung-halaman', [OcrController::class, 'countPages'])->name('ocr.count');
 Route::post('/ocr/proses-halaman', [OcrController::class, 'processSinglePage'])->name('ocr.process');
+Route::post('/ocr/proses-dokumen', [OcrController::class, 'processDocument'])->name('ocr.processDocument');
 Route::post('/ocr/simpan-verifikasi', [OcrController::class, 'saveVerifiedData'])->name('ocr.save');
 Route::get('/view-pdf', [App\Http\Controllers\OcrController::class, 'viewPdf'])->name('view.pdf');
 
