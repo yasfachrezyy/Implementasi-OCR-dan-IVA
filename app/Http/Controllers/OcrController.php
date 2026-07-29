@@ -9,9 +9,6 @@ use App\Services\GeminiOcrService;
 
 class OcrController extends Controller
 {
-    // =========================================================================
-    // PATH KONFIGURASI — sesuaikan jika Ghostscript di lokasi lain
-    // =========================================================================
     private function gsPath(): string
     {
         $userAppData = getenv('LOCALAPPDATA') ? getenv('LOCALAPPDATA') . '\Programs' : '';
@@ -51,7 +48,7 @@ class OcrController extends Controller
             if ($p && file_exists($p)) return $p;
         }
 
-        return 'gswin64c'; // fallback ke PATH
+        return 'gswin64c';
     }
 
     private function isExecutableAvailable(string $cmd): bool
@@ -63,9 +60,7 @@ class OcrController extends Controller
             && !str_contains(strtolower($out), 'error');
     }
 
-    // =========================================================================
-    // 1. HITUNG HALAMAN PDF
-    // =========================================================================
+    //hitung halaman
     public function countPages(Request $request)
     {
         try {
@@ -93,22 +88,20 @@ class OcrController extends Controller
     {
         $gs = $this->gsPath();
 
-        // Metode Ghostscript
+        //metode ghostscript
         $gsCmd = "\"{$gs}\" -q -dNODISPLAY --permit-file-read=\"{$filePath}\" -c \"({$filePath}) (r) file runpdfbegin pdfpagecount = quit\" 2>&1";
         $output = shell_exec($gsCmd);
         if ($output && is_numeric(trim($output))) {
             return max(1, (int) trim($output));
         }
 
-        // Fallback regex
+        //fallback regex
         $pdfContent = file_get_contents($filePath);
         $count = preg_match_all('/\/Type\s*\/Page[^s]/i', $pdfContent, $dummy);
         return $count > 0 ? $count : 1;
     }
 
-    // =========================================================================
-    // 2. PROSES OCR SATU HALAMAN — menggunakan Gemini Vision API
-    // =========================================================================
+    //proses
     public function processSinglePage(Request $request)
     {
         ini_set('memory_limit', '-1');
@@ -121,20 +114,16 @@ class OcrController extends Controller
             $pageNumber = (int) $request->page_number;
             $gs         = $this->gsPath();
 
-            // Validasi Ghostscript tersedia
             if (!$this->isExecutableAvailable($gs)) {
                 throw new \Exception('Ghostscript (gswin64c) belum terinstall atau tidak ditemukan di PATH.');
             }
 
-            // Cek GEMINI_API_KEY
             $geminiKey = env('GEMINI_API_KEY', '');
             if (empty($geminiKey)) {
                 throw new \Exception('GEMINI_API_KEY belum dikonfigurasi di file .env');
             }
 
-            // ------------------------------------------------------------------
-            // A. RASTERISASI: PDF → JPEG menggunakan Ghostscript (300 DPI)
-            // ------------------------------------------------------------------
+            //rasterisasi PDF → JPEG (300 DPI)
             $tempDir = storage_path('app/public/temp_ocr');
             if (!File::exists($tempDir)) File::makeDirectory($tempDir, 0755, true);
 
@@ -153,13 +142,11 @@ class OcrController extends Controller
                 throw new \Exception('Ghostscript gagal render halaman. Log: ' . $gsLog);
             }
 
-            // ------------------------------------------------------------------
-            // B. KIRIM GAMBAR KE GEMINI VISION API
-            // ------------------------------------------------------------------
             $geminiService = new GeminiOcrService();
-            $extractedData = $geminiService->extractFromImage($jpgPath, $pageNumber);
+            $rawExtractedData = $geminiService->extractFromImage($jpgPath, $pageNumber);
 
-            // Bersihkan file sementara
+            $extractedData = $this->handleDuplicateDocuments($rawExtractedData);
+
             foreach ($tempFiles as $tmp) {
                 if (File::exists($tmp)) File::delete($tmp);
             }
@@ -182,9 +169,6 @@ class OcrController extends Controller
         }
     }
 
-    // =========================================================================
-    // 2b. PROSES SELURUH DOKUMEN SEKALIGUS — 1 berkas = 1 request Gemini
-    // =========================================================================
     public function processDocument(Request $request)
     {
         ini_set('memory_limit', '-1');
@@ -205,10 +189,8 @@ class OcrController extends Controller
                 throw new \Exception('GEMINI_API_KEY belum dikonfigurasi di file .env');
             }
 
-            // Hitung jumlah halaman
             $totalPages = $this->getPdfPageCount($filePath);
 
-            // Render SEMUA halaman ke JPEG (DPI lebih rendah supaya ukuran file lebih kecil)
             $tempDir   = storage_path('app/public/temp_ocr');
             if (!File::exists($tempDir)) File::makeDirectory($tempDir, 0755, true);
 
@@ -236,11 +218,11 @@ class OcrController extends Controller
                 throw new \Exception('Tidak ada halaman yang berhasil di-render oleh Ghostscript.');
             }
 
-            // Kirim SEMUA gambar ke Gemini dalam 1 request
             $geminiService = new GeminiOcrService();
-            $extractedData = $geminiService->extractFromMultipleImages($imagePaths, $totalPages);
+            $rawExtractedData = $geminiService->extractFromMultipleImages($imagePaths, $totalPages);
 
-            // Bersihkan semua file sementara
+            $extractedData = $this->handleDuplicateDocuments($rawExtractedData);
+
             foreach ($tempFiles as $tmp) {
                 if (File::exists($tmp)) File::delete($tmp);
             }
@@ -263,7 +245,34 @@ class OcrController extends Controller
         }
     }
 
-    // =========================================================================
+    private function handleDuplicateDocuments(array $rawExtractedData): array
+    {
+        $baseCounts = [];
+        foreach (array_keys($rawExtractedData) as $docType) {
+            $baseType = trim(preg_replace('/\s*\(?\d+\)?$/', '', $docType));
+            $baseCounts[$baseType] = ($baseCounts[$baseType] ?? 0) + 1;
+        }
+
+        $finalData = [];
+        $docCounters = [];
+
+        foreach ($rawExtractedData as $docType => $fields) {
+            $baseType = trim(preg_replace('/\s*\(?\d+\)?$/', '', $docType));
+            $docCounters[$baseType] = ($docCounters[$baseType] ?? 0) + 1;
+
+            if ($baseCounts[$baseType] > 1) {
+                $newDocType = $baseType . " (" . $docCounters[$baseType] . ")";
+            } else {
+                $newDocType = $baseType; 
+            }
+            
+            $finalData[$newDocType] = $fields;
+        }
+
+        return $finalData;
+    }
+
+    //simpan
     public function saveVerifiedData(Request $request)
     {
         $request->validate([
@@ -290,9 +299,7 @@ class OcrController extends Controller
         }
     }
 
-    // =========================================================================
-    // 4. VIEW PDF (serve file dengan aman)
-    // =========================================================================
+    //view pdf
     public function viewPdf(Request $request)
     {
         $filePath = $request->query('path');

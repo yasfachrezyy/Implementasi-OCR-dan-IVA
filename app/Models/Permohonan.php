@@ -17,6 +17,7 @@ class Permohonan extends Model
         'keterangan_tambahan',
         'harga_aset',
         'nop',
+        'data_tambahan',
         'file_path',
         'status',
         'notes',
@@ -28,13 +29,11 @@ class Permohonan extends Model
         'ocr_result' => 'array',
     ];
 
-    // Relasi ke model User (Klien)
     public function client()
     {
         return $this->belongsTo(User::class, 'client_id');
     }
 
-    // Relasi ke model Service (Layanan)
     public function service()
     {
         return $this->belongsTo(Service::class, 'service_id');

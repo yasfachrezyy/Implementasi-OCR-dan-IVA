@@ -44,7 +44,6 @@ Route::middleware(['auth', 'role:staff'])->prefix('staff')->name('staff.')->grou
     Route::get('laporan', [\App\Http\Controllers\LaporanController::class, 'index'])->name('laporan.index');
     Route::get('laporan/excel', [\App\Http\Controllers\LaporanController::class, 'exportExcel'])->name('laporan.export.excel');
     Route::get('laporan/pdf', [\App\Http\Controllers\LaporanController::class, 'exportPdf'])->name('laporan.export.pdf');
-
 });
 
 Route::middleware(['auth', 'role:notaris'])->prefix('notaris')->name('notaris.')->group(function () {
@@ -58,7 +57,6 @@ Route::middleware(['auth', 'role:notaris'])->prefix('notaris')->name('notaris.')
     Route::get('laporan', [\App\Http\Controllers\LaporanController::class, 'index'])->name('laporan.index');
     Route::get('laporan/excel', [\App\Http\Controllers\LaporanController::class, 'exportExcel'])->name('laporan.export.excel');
     Route::get('laporan/pdf', [\App\Http\Controllers\LaporanController::class, 'exportPdf'])->name('laporan.export.pdf');
-
 });
 
 Route::get('/iva', [IvaController::class, 'index'])->name('iva.index');
@@ -71,4 +69,3 @@ Route::post('/ocr/simpan-verifikasi', [OcrController::class, 'saveVerifiedData']
 Route::get('/view-pdf', [App\Http\Controllers\OcrController::class, 'viewPdf'])->name('view.pdf');
 
 require __DIR__.'/auth.php';
-

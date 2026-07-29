@@ -13,7 +13,6 @@ class GeminiGenerationService
 
     public function __construct()
     {
-        // Gunakan key khusus IVA jika ada, fallback ke key umum
         $this->apiKey = env('GEMINI_IVA_API_KEY') ?: env('GEMINI_API_KEY', '');
         $model = env('GEMINI_IVA_MODEL', 'gemini-2.5-flash-lite'); 
         

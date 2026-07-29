@@ -14,9 +14,6 @@ class TfIdfService
         'adalah', 'itu', 'ini', 'apa', 'bagaimana', 'saja', 'cara', 'saya', 'mau'
     ];
 
-    /**
-     * Fungsi Utama untuk mencari Intent terbaik berdasarkan input klien
-     */
     public function findBestMatch(string $userQuery): ?array
     {
         $corpusData = PolaBakuNlu::with('intent')->get();
@@ -66,9 +63,6 @@ class TfIdfService
         return null; 
     }
 
-    /**
-     * Text Preprocessing: Case folding, Punctuation removal, Tokenization & Stopword removal
-     */
     private function preprocess(string $text): array
     {
         $text = strtolower($text);
@@ -82,9 +76,7 @@ class TfIdfService
         return array_values($filteredTokens);
     }
 
-    /**
-     * Menghitung Inverse Document Frequency (IDF)
-     */
+    //menghitung inverse document frequency (IDF)
     private function calculateIdf(array $allDocuments): array
     {
         $idf = [];
@@ -107,9 +99,7 @@ class TfIdfService
         return $idf;
     }
 
-    /**
-     * Menghitung Term Frequency (TF) dikali IDF untuk membentuk Vector
-     */
+    //menghitung term frequency (TF) dikali IDF untuk membentuk Vector
     private function calculateTfIdf(array $tokens, array $idf): array
     {
         $vector = [];
@@ -124,9 +114,7 @@ class TfIdfService
         return $vector;
     }
 
-    /**
-     * Menghitung Cosine Similarity antara dua vector (A dan B)
-     */
+    //menghitung cosine similarity
     private function cosineSimilarity(array $vecA, array $vecB): float
     {
         $dotProduct = 0.0;

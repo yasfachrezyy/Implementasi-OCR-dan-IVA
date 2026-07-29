@@ -42,7 +42,7 @@ class PermohonanKlienController extends Controller
     {
         $request->validate([
             'service_id' => 'required|exists:services,id',
-            'nama_pihak_pertama' => 'required|string|max:255',
+            'nama_pihak_pertama' => 'required_without:data_tambahan|nullable|string|max:255',
             'nama_pihak_kedua' => 'nullable|string|max:255',
             'keterangan_tambahan' => 'nullable|string',
             'berkas_pengajuan' => 'required|file|mimes:pdf,zip|max:20240',
@@ -56,18 +56,27 @@ class PermohonanKlienController extends Controller
             ],
 
             'nop' => 'nullable|string|max:50',
+            'data_tambahan' => 'nullable|array', 
         ]);
 
         $filePath = $request->file('berkas_pengajuan')->store('berkas_permohonan', 'public');
 
+        $namaPihakPertama = $request->nama_pihak_pertama;
+        if (empty($namaPihakPertama) && $request->has('data_tambahan')) {
+            $namaPihakPertama = $request->data_tambahan['nama_entitas'] ?? '-';
+        }
+
         Permohonan::create([
-            'client_id' => Auth::id(),
+            'client_id' => Auth::id(), 
             'service_id' => $request->service_id,
-            'nama_pihak_pertama' => $request->nama_pihak_pertama,
+            'nama_pihak_pertama' => $namaPihakPertama,
             'nama_pihak_kedua' => $request->nama_pihak_kedua,
             'keterangan_tambahan' => $request->keterangan_tambahan,
             'harga_aset' => $request->harga_aset,
             'nop' => $request->nop,
+            
+            'data_tambahan' => $request->has('data_tambahan') ? json_encode($request->data_tambahan) : null,
+            
             'file_path' => $filePath,
             'status' => 'Diajukan',
         ]);

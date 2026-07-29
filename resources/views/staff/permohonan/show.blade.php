@@ -27,8 +27,8 @@
                 <div><p class="text-gray-500">Email</p><p class="font-semibold text-gray-900">{{ $permohonan->client->email }}</p></div>
             </div>
             <div class="mt-8">
-                <a href="{{ Storage::url($permohonan->file_path) }}" target="_blank" class="w-full block text-center px-4 py-3 font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500 transition">
-                    Unduh Berkas Persyaratan
+                <a href="{{ url('dokumen-pdf/' . $permohonan->file_path) }}" target="_blank" class="w-full block text-center px-4 py-3 font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500 transition">
+                    Lihat Berkas Persyaratan
                 </a>
                 @php
                     $editRouteName = (auth()->user()->role == 'notaris') 
@@ -42,9 +42,6 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- TABEL DOKUMEN & TOMBOL PROSES OCR          -->
-    <!-- ========================================== -->
     <div class="mt-8 bg-white p-8 rounded-xl shadow-md border">
         <h3 class="text-xl font-bold text-gray-800 border-b pb-4 mb-4">Dokumen Persyaratan & Ekstraksi OCR</h3>
         <div class="overflow-x-auto">
@@ -79,9 +76,6 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- MODAL 1: PROGRESS LOADING OCR              -->
-    <!-- ========================================== -->
     <div id="modalProgressOcr" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-50 transition-opacity">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl overflow-hidden">
             <div class="p-4 border-b bg-gray-50">
@@ -100,9 +94,6 @@
         </div>
     </div>
 
-    <!-- ========================================== -->
-    <!-- MODAL 2: TINJAUAN & VERIFIKASI DATA (HITL) -->
-    <!-- ========================================== -->
     <div id="modalReviewOcr" class="hidden fixed inset-0 z-50 items-center justify-center bg-black bg-opacity-50 transition-opacity p-4">
         <div class="bg-white rounded-lg shadow-xl w-full max-w-7xl overflow-hidden h-[92vh] flex flex-col">
             <div class="p-4 border-b flex justify-between items-center bg-gray-50">
@@ -112,13 +103,11 @@
             
             <div class="flex-1 flex overflow-hidden">
                 <div class="w-1/2 bg-gray-800 border-r relative">
-                    <!-- Iframe Viewer PDF -->
                     <iframe id="pdfViewerFrame" src="" class="w-full h-full border-none"></iframe>
                 </div>
                 
                 <div class="w-1/2 p-6 overflow-y-auto bg-white">
                     <form id="formVerifikasiOcr" class="space-y-6">
-                        <!-- KONTAINER DINAMIS: Form akan dirender ke sini menggunakan Javascript -->
                         <div id="dynamicFormContainer">
                             <p class="text-sm text-gray-500 italic">Menunggu data hasil ekstraksi...</p>
                         </div>
@@ -128,7 +117,7 @@
 
             <div class="p-4 border-t bg-gray-50 flex justify-end space-x-3">
                 <button type="button" onclick="tutupModalReview()" class="px-5 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 text-sm font-medium transition">
-                    Koreksi Manual / Batal
+                    Batal
                 </button>
                 <button type="button" onclick="simpanDataTerverifikasi()" class="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition shadow-sm">
                     Gunakan Data Ini
@@ -142,15 +131,14 @@
 @push('scripts')
 <script>
     const pathLokalPdf   = "{!! $permohonan->file_path !!}";
+    const pdfUtamaUrl = "{{ asset('storage/' . $permohonan->file_path) }}";
+    
     const csrfToken      = "{{ csrf_token() }}";
     const permohonanId   = {{ $permohonan->id }};
     const saveUrl        = "{{ route('ocr.save') }}";
 
     let kumpulanDataOcr  = {};
 
-    // ======================================================================
-    // TOAST NOTIFICATION
-    // ======================================================================
     function tampilkanToast(pesan, tipe = 'success') {
         const existing = document.getElementById('ocrToast');
         if (existing) existing.remove();
@@ -170,11 +158,8 @@
         }, 3500);
     }
 
-    // ======================================================================
-    // MULAI PROSES OCR — 1 Berkas = 1 Request ke Gemini
-    // ======================================================================
     async function mulaiProsesOcr() {
-        const btn           = document.getElementById('btnProsesOcr');
+        const btn          = document.getElementById('btnProsesOcr');
         const modalProgress = document.getElementById('modalProgressOcr');
         const containerBar  = document.getElementById('containerProgressBar');
 
@@ -184,7 +169,6 @@
         modalProgress.classList.add('flex');
         kumpulanDataOcr = {};
 
-        // Tampilkan UI loading animasi (bukan per-halaman lagi)
         containerBar.innerHTML = `
             <div class="flex flex-col items-center justify-center py-6 gap-4">
                 <div class="relative w-16 h-16">
@@ -196,19 +180,17 @@
                         Mengirim seluruh dokumen ke Gemini Vision AI...
                     </p>
                     <p class="text-xs text-gray-400 mt-1" id="subStatusOcrText">
-                        Semua halaman diproses sekaligus dalam 1 request
+                        Semua halaman diproses
                     </p>
                 </div>
                 <div id="timerDisplay" class="text-xs text-gray-400"></div>
             </div>`;
 
-        // Tampilkan timer berjalan
         let elapsed   = 0;
         const timerEl = document.getElementById('timerDisplay');
         const timer   = setInterval(() => {
             elapsed++;
             if (timerEl) timerEl.innerText = `⏱ ${elapsed}s berlalu...`;
-            // Update pesan sesuai progress waktu
             const statusEl = document.getElementById('statusOcrText');
             if (statusEl) {
                 if (elapsed < 10)       statusEl.innerText = 'Mengirim seluruh dokumen ke Gemini Vision AI...';
@@ -219,8 +201,7 @@
         }, 1000);
 
         try {
-            // Timeout 3 menit — proses multi-gambar butuh lebih lama
-            const controller = new AbortController();
+            const controller = new window.AbortController();
             const timeoutId  = setTimeout(() => controller.abort(), 180000);
 
             const req = await fetch("{{ route('ocr.processDocument') }}", {
@@ -232,7 +213,6 @@
             clearTimeout(timeoutId);
             clearInterval(timer);
 
-            // Cek content-type
             const contentType = req.headers.get('Content-Type') || '';
             if (!contentType.includes('application/json')) {
                 const htmlText = await req.text();
@@ -291,14 +271,12 @@
         }
     }
 
-    // ======================================================================
-    // BUKA MODAL REVIEW — dengan highlight field kosong
-    // ======================================================================
     function bukaModalReview() {
         const modalReview = document.getElementById('modalReviewOcr');
         modalReview.classList.remove('hidden');
         modalReview.classList.add('flex');
-        document.getElementById('pdfViewerFrame').src = "{{ route('view.pdf') }}?path=" + encodeURIComponent(pathLokalPdf) + "#navpanes=0&view=FitH";
+        
+        document.getElementById('pdfViewerFrame').src = pdfUtamaUrl + "#navpanes=0&view=FitH";
 
         const container = document.getElementById('dynamicFormContainer');
         container.innerHTML = '';
@@ -309,13 +287,12 @@
                     <span class="text-red-500 text-xl">⚠</span>
                     <div>
                         <p class="text-sm font-semibold text-red-700">Tidak ada dokumen yang dikenali</p>
-                        <p class="text-xs text-red-500 mt-1">Dokumen AJB yang didukung: KTP, Kartu Keluarga, Buku Nikah, Sertifikat Tanah (SHM/HGB), SPPT PBB, Bukti Lunas PBB (STTS), NPWP, Surat Persetujuan Suami/Istri.</p>
+                        <p class="text-xs text-red-500 mt-1">Dokumen yang didukung: KTP, Kartu Keluarga, Buku Nikah, Sertifikat Tanah, SPPT PBB, dll.</p>
                     </div>
                 </div>`;
             return;
         }
 
-        // Hitung jumlah field kosong untuk summary
         let totalField = 0, fieldKosong = 0;
 
         for (const [docName, fields] of Object.entries(kumpulanDataOcr)) {
@@ -376,7 +353,6 @@
                 </div>`;
         }
 
-        // Tampilkan summary kelengkapan di atas form
         const pctOk  = Math.round(((totalField - fieldKosong) / totalField) * 100);
         const summCls = pctOk >= 80 ? 'bg-green-50 border-green-200 text-green-700'
                        : pctOk >= 50 ? 'bg-yellow-50 border-yellow-200 text-yellow-700'
@@ -389,24 +365,18 @@
         container.insertAdjacentHTML('afterbegin', summHtml);
     }
 
-    // ======================================================================
-    // TUTUP MODAL
-    // ======================================================================
     function tutupModalReview() {
         document.getElementById('modalReviewOcr').classList.add('hidden');
         document.getElementById('modalReviewOcr').classList.remove('flex');
         document.getElementById('pdfViewerFrame').src = '';
     }
 
-    // ======================================================================
-    // SIMPAN DATA TERVERIFIKASI — kirim ke backend dan simpan ke database
-    // ======================================================================
     async function simpanDataTerverifikasi() {
         const formElement = document.getElementById('formVerifikasiOcr');
         if (!formElement) return;
 
         const ocrData = {};
-        formElement.querySelectorAll('input[name^="ocr_data"]').forEach(input => {
+        formElement.querySelectorAll('input[name^="ocr_data"], textarea[name^="ocr_data"]').forEach(input => {
             const match = input.name.match(/ocr_data\[([^\]]+)\]\[([^\]]+)\]/);
             if (match) {
                 const [, docName, fieldName] = match;

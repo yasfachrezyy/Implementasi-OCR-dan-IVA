@@ -10,10 +10,8 @@ class PolaBakuNlu extends Model
 {
     use HasFactory;
 
-    // Mendefinisikan nama tabel secara eksplisit agar Laravel tidak mencari tabel 'pola_baku_nlus'
     protected $table = 'pola_baku_nlu';
 
-    // Mengizinkan mass assignment untuk kolom-kolom ini (sangat penting untuk proses Seeding)
     protected $fillable = [
         'intent_id',
         'pola_pertanyaan',

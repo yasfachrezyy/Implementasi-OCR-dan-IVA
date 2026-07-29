@@ -5,27 +5,16 @@ namespace App\Services;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
-/**
- * GeminiOcrService
- *
- * Menggunakan Google Gemini Vision API untuk mengekstrak data dari
- * gambar halaman dokumen berkas persyaratan AJB (Akta Jual Beli).
- *
- * Lebih akurat dibanding Tesseract+Regex karena Gemini memahami
- * konteks, layout dua kolom, stempel, dan variasi format dokumen daerah.
- */
 class GeminiOcrService
 {
     protected string $apiKey;
     protected string $apiUrl;
+    protected string $model;
 
-    // Model yang digunakan — gemini-2.5-flash mendukung vision (image input)
     public function __construct()
     {
-        // Model dapat diubah via .env (misal: gemini-2.5-flash-lite, gemini-2.5-flash, gemini-1.5-flash)
-        $this->model = env('GEMINI_OCR_MODEL', 'gemini-2.5-flash-lite');
+        $this->model = env('GEMINI_OCR_MODEL', 'gemini-2.5-flash');
 
-        // Gunakan key khusus OCR jika ada, fallback ke key umum
         $this->apiKey = config('services.gemini_ocr.key')
             ?: env('GEMINI_OCR_API_KEY')
             ?: env('GEMINI_API_KEY', '');
@@ -49,7 +38,6 @@ class GeminiOcrService
             throw new \Exception("File gambar tidak ditemukan: {$imagePath}");
         }
 
-        // Encode gambar ke base64
         $imageData   = base64_encode(file_get_contents($imagePath));
         $mimeType    = $this->detectMimeType($imagePath);
 
@@ -72,17 +60,14 @@ class GeminiOcrService
                 ],
             ],
             'generationConfig' => [
-                'temperature'     => 0.0,   // Deterministik — tidak kreatif
+                'temperature'     => 0.0,
                 'response_mime_type' => 'application/json',
             ],
         ];
 
-        // ------------------------------------------------------------------
-        // Kirim ke Gemini dengan retry otomatis jika kena rate limit (429)
-        // Free tier: ~10 RPM — jeda antar percobaan: 15s, 30s, 60s
-        // ------------------------------------------------------------------
+
         $maxRetry   = 3;
-        $retryDelay = [15, 30, 60]; // detik tunggu per percobaan
+        $retryDelay = [15, 30, 60];
         $response   = null;
 
         for ($attempt = 1; $attempt <= $maxRetry; $attempt++) {
@@ -95,7 +80,6 @@ class GeminiOcrService
 
             $status = $response->status();
 
-            // 429 = rate limit — tunggu lalu coba lagi
             if ($status === 429 && $attempt < $maxRetry) {
                 $wait = $retryDelay[$attempt - 1];
                 Log::warning("Gemini OCR [{$pageNumber}]: Rate limit 429, tunggu {$wait}s (percobaan {$attempt}/{$maxRetry})");
@@ -103,13 +87,11 @@ class GeminiOcrService
                 continue;
             }
 
-            // Error lain atau sudah max retry
             $errorBody = $response->body();
             $errorJson = json_decode($errorBody, true);
             $errorMsg  = $errorJson['error']['message'] ?? $errorBody;
 
             if ($status === 429) {
-                // Setelah 3x retry masih 429 → kemungkinan RPD habis
                 throw new \Exception(
                     "Rate limit Gemini API terlampaui (429). " .
                     "Kemungkinan kuota harian (RPD) sudah habis. " .
@@ -123,7 +105,6 @@ class GeminiOcrService
 
         $raw = $response->json();
 
-        // Ambil teks dari respons
         $textContent = $raw['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
         if (empty($textContent)) {
@@ -131,18 +112,10 @@ class GeminiOcrService
             return [];
         }
 
-        // Parse JSON dari respons Gemini
         return $this->parseGeminiResponse($textContent, $pageNumber);
     }
 
-    // =========================================================================
-    // PROMPT BUILDER
-    // =========================================================================
-
-    /**
-     * Bangun prompt detail untuk ekstraksi dokumen AJB.
-     * Prompt meminta Gemini output JSON berstruktur dengan semua tipe dokumen.
-     */
+    //prompt builder
     private function buildPrompt(): string
     {
         return <<<'PROMPT'
@@ -158,8 +131,9 @@ Dokumen ini adalah bagian dari berkas persyaratan AJB (Akta Jual Beli) yang mung
 - Sertifikat Tanah (SHM / HGB / dll)
 - SPPT PBB (Surat Pemberitahuan Pajak Terhutang Pajak Bumi dan Bangunan)
 - STTS / Bukti Lunas PBB
-- NPWP — HANYA dari KARTU NPWP FISIK (bukan dari field NPWP di dokumen lain)
+- NPWP — HANYA dari KARTU NPWP FISIK
 - Surat Persetujuan Suami/Istri
+- Surat Pengantar (RT/RW/Desa/Kelurahan/Kecamatan)
 
 INSTRUKSI PENTING:
 1. Identifikasi jenis dokumen yang ada di halaman ini (bisa lebih dari satu)
@@ -171,30 +145,14 @@ INSTRUKSI PENTING:
 7. Untuk nomor sertifikat tanah: cari label "No." atau "Nomor" di bagian identitas sertifikat, bukan tahun
 8. Untuk NOP SPPT: format XX.XX.XXX.XXX.XXX-XXXX.X (biasanya 18 digit dengan titik-strip)
 9. KHUSUS NPWP: Ekstrak data NPWP HANYA jika halaman ini berisi KARTU NPWP FISIK.
-   Ciri kartu NPWP: ada logo "npwp" atau "DJP" atau tulisan "DIREKTORAT JENDERAL PAJAK",
-   nomor besar di tengah kartu (format 16 digit baru: XXXXXXXXXXXXXXXX, atau format lama: XX.XXX.XXX.X-XXX.XXX),
-   dan nama pemegang kartu.
-   JANGAN ekstrak NPWP dari field "NPWP Wajib Pajak" atau "No. NPWP" yang tercantum
-   di dalam dokumen STTS, SPPT PBB, SSB, atau dokumen pajak lainnya —
-   itu bukan kartu NPWP, melainkan hanya referensi nomor di dokumen tersebut.
 10. KHUSUS SURAT KETERANGAN WARIS: Untuk field "Daftar Ahli Waris", tuliskan SETIAP AHLI WARIS DALAM BARIS BARU (dipisahkan karakter newline \n).
-    Cantumkan SELURUH DATA DIRI yang ada di dokumen untuk masing-masing ahli waris:
-    - Nomor urut & Nama Lengkap
-    - NIK (jika tercantum)
-    - Tempat & Tanggal Lahir (jika ada)
-    - Alamat / Tempat Tinggal (jika ada)
-    - Status/Keterangan Khusus yang SANGAT PENTING (misalnya: "(Telah Meninggal Dunia pada tanggal ...)", "(Anak Kandung)", "(Istri/Suami)").
-    CONTOH FORMAT DAFTAR AHLI WARIS:
-    1. ACENG KURNIA — NIK: 3203..., TTL: Cianjur, 20 Juni 1960, Alamat: Kp. Simpang
-    2. EDI KUSWARA (Telah Meninggal Dunia pada tanggal 10 Mei 2015) — NIK: 3203...
-    3. ATIK KURNIASIH — NIK: 3203...
-    JANGAN menggabungkan daftar ahli waris dalam 1 baris tanpa newline!
+11. KHUSUS DOKUMEN GANDA: Jika di dalam gambar terdapat LEBIH DARI SATU DOKUMEN dengan JENIS YANG SAMA (contoh: ada 2 KTP berbeda, atau 2 KK berbeda), kamu WAJIB memisahkannya menjadi objek terpisah dengan menambahkan angka pada kunci JSON-nya (misal: "KTP 1", "KTP 2", "KK 1", "KK 2"). Pastikan nama kunci berangka tersebut dimasukkan ke array "dokumen_terdeteksi".
 
 Kembalikan HANYA JSON valid dengan struktur berikut (isi hanya dokumen yang ADA di halaman ini):
 
 {
-  "dokumen_terdeteksi": ["KTP", "KK"],
-  "KTP": {
+  "dokumen_terdeteksi": ["KTP 1", "KTP 2", "KK 1", "Surat Pengantar"],
+  "KTP 1": {
     "NIK": "",
     "Nama Lengkap": "",
     "Tempat Lahir": "",
@@ -214,7 +172,7 @@ Kembalikan HANYA JSON valid dengan struktur berikut (isi hanya dokumen yang ADA 
     "Kewarganegaraan": "",
     "Berlaku Hingga": ""
   },
-  "KK": {
+  "KK 1": {
     "No KK": "",
     "Kepala Keluarga": "",
     "Alamat": "",
@@ -240,6 +198,12 @@ Kembalikan HANYA JSON valid dengan struktur berikut (isi hanya dokumen yang ADA 
         "Kewarganegaraan": ""
       }
     ]
+  },
+  "Surat Pengantar": {
+    "Nomor Surat": "",
+    "Tanggal Surat": "",
+    "Instansi Pengirim": "",
+    "Perihal": ""
   },
   "Akta Kelahiran": {
     "Nomor Akta Kelahiran": "",
@@ -329,25 +293,15 @@ Kembalikan HANYA JSON valid dengan struktur berikut (isi hanya dokumen yang ADA 
 
 PENTING: 
 - Untuk array "dokumen_terdeteksi", isi HANYA nama dokumen yang benar-benar ada di halaman ini
-- Jika halaman berisi lebih dari satu dokumen (misal KTP dan KK dalam satu halaman), isi keduanya
 - Jika halaman ini adalah cover, pengantar, atau dokumen lain yang tidak ada dalam daftar, kembalikan {"dokumen_terdeteksi": [], "catatan": "deskripsi singkat isi halaman"}
-- NPWP hanya dimasukkan ke "dokumen_terdeteksi" jika halaman ini benar-benar memuat KARTU NPWP FISIK (ada logo npwp/DJP). Jika yang ada hanya field NPWP di dalam STTS/SPPT/dokumen pajak lain, JANGAN tambahkan "NPWP" ke dokumen_terdeteksi.
+- Pastikan kunci JSON sesuai dengan yang ada di dalam "dokumen_terdeteksi".
 PROMPT;
     }
 
-    // =========================================================================
-    // RESPONSE PARSER
-    // =========================================================================
-
-    /**
-     * Parse respons teks dari Gemini menjadi array terstruktur.
-     * Gemini kadang menambahkan markdown code fence ```json ... ``` — kita strip dulu.
-     */
+    //respon parser
     private function parseGeminiResponse(string $text, int $pageNumber): array
     {
-        // Strip markdown code fence jika ada
-        $text = preg_replace('/^```(?:json)?\s*/m', '', $text);
-        $text = preg_replace('/```\s*$/m', '', $text);
+        $text = preg_replace('/^```(?:json)?\s*/m', '', $text);$text = preg_replace('/```\s*$/m', '', $text);
         $text = trim($text);
 
         $data = json_decode($text, true);
@@ -357,7 +311,6 @@ PROMPT;
                 'error' => json_last_error_msg(),
                 'text'  => substr($text, 0, 500),
             ]);
-            // Coba cari JSON di dalam teks jika ada teks sebelum/sesudahnya
             if (preg_match('/\{[\s\S]+\}/m', $text, $m)) {
                 $data = json_decode($m[0], true);
                 if (json_last_error() !== JSON_ERROR_NONE) {
@@ -371,10 +324,7 @@ PROMPT;
         return $this->normalizeExtractedData($data, $pageNumber);
     }
 
-    /**
-     * Normalisasi dan filter data hasil ekstraksi Gemini.
-     * Hanya kembalikan dokumen yang ada di "dokumen_terdeteksi".
-     */
+    //normalisasi dan filter data hasil ekstraksi Gemini.
     private function normalizeExtractedData(array $data, int $pageNumber): array
     {
         $detected = $data['dokumen_terdeteksi'] ?? [];
@@ -386,20 +336,22 @@ PROMPT;
             return [];
         }
 
-        // Mapping nama kunci Gemini → nama tampilan di frontend
+        //mapping nama kunci
         $keyMapping = [
-            'KTP'                          => 'KTP',
-            'KK'                           => 'Kartu Keluarga',
-            'Akta Kelahiran'               => 'Akta Kelahiran',
-            'Buku Nikah'                   => 'Buku Nikah',
-            'Surat Cerai'                  => 'Surat Cerai',
-            'Surat Kematian'               => 'Surat Keterangan Kematian',
-            'Surat Keterangan Waris'       => 'Surat Keterangan Waris',
-            'Sertifikat Tanah'             => 'Sertifikat Tanah',
-            'SPPT PBB'                     => 'SPPT PBB',
-            'Bukti Lunas PBB (STTS)'       => 'Bukti Lunas PBB (STTS)',
-            'NPWP'                         => 'NPWP',
-            'Surat Persetujuan Suami/Istri'=> 'Surat Persetujuan Suami/Istri',
+            'KTP'                           => 'KTP',
+            'KK'                            => 'Kartu Keluarga',
+            'Akta Kelahiran'                => 'Akta Kelahiran',
+            'Buku Nikah'                    => 'Buku Nikah',
+            'Surat Cerai'                   => 'Surat Cerai',
+            'Surat Kematian'                => 'Surat Keterangan Kematian',
+            'Surat Keterangan Waris'        => 'Surat Keterangan Waris',
+            'Sertifikat Tanah'              => 'Sertifikat Tanah',
+            'SPPT PBB'                      => 'SPPT PBB',
+            'Bukti Lunas PBB (STTS)'        => 'Bukti Lunas PBB (STTS)',
+            'STTS'                          => 'Bukti Lunas PBB (STTS)',
+            'NPWP'                          => 'NPWP',
+            'Surat Persetujuan Suami/Istri' => 'Surat Persetujuan Suami/Istri',
+            'Surat Pengantar'               => 'Surat Pengantar',
         ];
 
         $result = [];
@@ -407,11 +359,21 @@ PROMPT;
         foreach ($detected as $docType) {
             if (!isset($data[$docType])) continue;
 
-            $docData    = $data[$docType];
-            $displayKey = $keyMapping[$docType] ?? $docType;
+            $docData = $data[$docType];
+            
+            $displayKey = $docType;
+            $baseTypeLogic = $docType;
 
-            // Khusus KK: flatten array anggota menjadi field Anggota 1, Anggota 2, dst
-            if ($docType === 'KK' && isset($docData['Anggota']) && is_array($docData['Anggota'])) {
+            foreach ($keyMapping as $baseKey => $mappedName) {
+                if (preg_match('/^' . preg_quote($baseKey, '/') . '(?:\s|_|-)*(\d*)$/i', $docType, $matches)) {
+                    $number = $matches[1] ?? '';
+                    $displayKey = $mappedName . ($number ? " ({$number})" : '');
+                    $baseTypeLogic = $baseKey;
+                    break;
+                }
+            }
+
+            if ($baseTypeLogic === 'KK' && isset($docData['Anggota']) && is_array($docData['Anggota'])) {
                 $anggota = $docData['Anggota'];
                 unset($docData['Anggota']);
 
@@ -443,10 +405,6 @@ PROMPT;
         return $result;
     }
 
-    // =========================================================================
-    // HELPER
-    // =========================================================================
-
     private function detectMimeType(string $path): string
     {
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
@@ -457,13 +415,8 @@ PROMPT;
         };
     }
 
-    // =========================================================================
-    // MULTI-IMAGE: Kirim semua halaman sekaligus dalam 1 request
-    // =========================================================================
-
     /**
      * Ekstrak data dari SEMUA halaman dokumen sekaligus dalam 1 request API.
-     * Jauh lebih hemat RPD dibanding per-halaman (14 halaman = 1 request, bukan 14).
      *
      * @param  string[] $imagePaths  Array path absolut gambar tiap halaman (urut dari hal. 1)
      * @param  int      $totalPages  Total halaman dokumen
@@ -482,7 +435,6 @@ PROMPT;
         $total = $totalPages ?: count($imagePaths);
         $parts = [];
 
-        // Susun semua gambar dengan label halaman di antara masing-masing
         foreach ($imagePaths as $i => $imagePath) {
             if (!file_exists($imagePath)) {
                 Log::warning("Multi-OCR: Gambar halaman " . ($i + 1) . " tidak ditemukan, dilewati.");
@@ -498,7 +450,6 @@ PROMPT;
             ];
         }
 
-        // Prompt di akhir, setelah semua gambar
         $parts[] = ['text' => $this->buildPromptMultiPage($total)];
 
         $payload = [
@@ -511,14 +462,13 @@ PROMPT;
             ],
         ];
 
-        // Retry dengan exponential backoff untuk 429
         $maxRetry   = 3;
         $retryDelay = [15, 30, 60];
         $response   = null;
 
         for ($attempt = 1; $attempt <= $maxRetry; $attempt++) {
             $response = Http::withoutVerifying()
-                ->timeout(180) // multi-image butuh waktu lebih lama
+                ->timeout(180)
                 ->withHeaders(['Content-Type' => 'application/json'])
                 ->post($this->apiUrl, $payload);
 
@@ -559,9 +509,7 @@ PROMPT;
         return $this->parseGeminiResponse($textContent, 0);
     }
 
-    /**
-     * Prompt untuk mode multi-halaman — Gemini menerima semua halaman sekaligus.
-     */
+    //prompt mode multi-halaman
     private function buildPromptMultiPage(int $totalPages): string
     {
         return <<<PROMPT
@@ -580,8 +528,9 @@ Dokumen yang mungkin ada di dalam berkas ini:
 - Sertifikat Tanah (SHM / HGB / dll)
 - SPPT PBB (Surat Pemberitahuan Pajak Terhutang Pajak Bumi dan Bangunan)
 - STTS / Bukti Lunas PBB
-- NPWP — HANYA dari KARTU NPWP FISIK (bukan dari field NPWP di dokumen lain)
+- NPWP — HANYA dari KARTU NPWP FISIK
 - Surat Persetujuan Suami/Istri
+- Surat Pengantar (RT/RW/Desa/Kelurahan/Kecamatan)
 
 INSTRUKSI PENTING:
 1. Identifikasi semua jenis dokumen yang ada di SELURUH {$totalPages} halaman
@@ -593,25 +542,16 @@ INSTRUKSI PENTING:
 7. Untuk nomor sertifikat tanah: cari label "No." atau "Nomor" di bagian identitas sertifikat, bukan tahun
 8. Untuk NOP SPPT: format XX.XX.XXX.XXX.XXX-XXXX.X (biasanya 18 digit dengan titik-strip)
 9. KHUSUS NPWP: Ekstrak data NPWP HANYA jika ada KARTU NPWP FISIK (logo npwp/DJP).
-   JANGAN ekstrak NPWP dari field "NPWP Wajib Pajak" di dalam STTS, SPPT PBB, atau dokumen pajak lainnya.
-10. KHUSUS SURAT KETERANGAN WARIS: Untuk field "Daftar Ahli Waris", tuliskan SETIAP AHLI WARIS DALAM BARIS BARU (dipisahkan karakter newline \n).
-    Cantumkan SELURUH DATA DIRI yang ada di dokumen untuk masing-masing ahli waris:
-    - Nomor urut & Nama Lengkap
-    - NIK (jika tercantum)
-    - Tempat & Tanggal Lahir (jika ada)
-    - Alamat / Tempat Tinggal (jika ada)
-    - Status/Keterangan Khusus yang SANGAT PENTING (misalnya: "(Telah Meninggal Dunia pada tanggal ...)", "(Anak Kandung)", "(Istri/Suami)").
-    CONTOH FORMAT DAFTAR AHLI WARIS:
-    1. ACENG KURNIA — NIK: 3203..., TTL: Cianjur, 20 Juni 1960, Alamat: Kp. Simpang
-    2. EDI KUSWARA (Telah Meninggal Dunia pada tanggal 10 Mei 2015) — NIK: 3203...
-    3. ATIK KURNIASIH — NIK: 3203...
-    JANGAN menggabungkan daftar ahli waris dalam 1 baris tanpa newline!
+10. KHUSUS SURAT KETERANGAN WARIS: Untuk field "Daftar Ahli Waris", tuliskan SETIAP AHLI WARIS DALAM BARIS BARU.
+11. KHUSUS DOKUMEN GANDA: Jika kamu menemukan LEBIH DARI SATU dokumen sejenis di dalam seluruh gambar (contoh: menemukan 2 KTP berbeda orang, atau 2 KK berbeda keluarga), kamu WAJIB memisahkannya menjadi objek JSON yang berbeda dengan menambahkan angka urut pada namanya.
+    Contoh: "KTP 1", "KTP 2", "KK 1", "KK 2".
+    Masukkan juga nama-nama tersebut secara terpisah ke dalam array "dokumen_terdeteksi" (contoh: ["KTP 1", "KTP 2", "KK 1", "Surat Pengantar"]).
 
 Kembalikan HANYA JSON valid dengan struktur berikut:
 
 {
-  "dokumen_terdeteksi": ["KTP", "KK"],
-  "KTP": {
+  "dokumen_terdeteksi": ["KTP 1", "KTP 2", "KK 1", "Surat Pengantar"],
+  "KTP 1": {
     "NIK": "",
     "Nama Lengkap": "",
     "Tempat Lahir": "",
@@ -631,7 +571,7 @@ Kembalikan HANYA JSON valid dengan struktur berikut:
     "Kewarganegaraan": "",
     "Berlaku Hingga": ""
   },
-  "KK": {
+  "KK 1": {
     "No KK": "",
     "Kepala Keluarga": "",
     "Alamat": "",
@@ -657,6 +597,12 @@ Kembalikan HANYA JSON valid dengan struktur berikut:
         "Kewarganegaraan": ""
       }
     ]
+  },
+  "Surat Pengantar": {
+    "Nomor Surat": "",
+    "Tanggal Surat": "",
+    "Instansi Pengirim": "",
+    "Perihal": ""
   },
   "Akta Kelahiran": {
     "Nomor Akta Kelahiran": "",
@@ -747,7 +693,7 @@ Kembalikan HANYA JSON valid dengan struktur berikut:
 PENTING:
 - "dokumen_terdeteksi" berisi semua dokumen yang ditemukan di SELURUH {$totalPages} halaman
 - Jika tidak ada dokumen yang dikenal sama sekali, kembalikan {"dokumen_terdeteksi": [], "catatan": "..."}
-- NPWP hanya dimasukkan jika ada KARTU NPWP FISIK (logo npwp/DJP), bukan sekedar field NPWP di dokumen lain
+- Pastikan kunci JSON sesuai dengan yang ada di dalam "dokumen_terdeteksi".
 PROMPT;
     }
 }

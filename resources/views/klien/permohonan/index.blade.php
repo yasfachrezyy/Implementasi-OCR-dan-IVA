@@ -8,33 +8,37 @@
 
     <div class="mt-8 bg-white p-6 rounded-xl shadow-md border border-gray-100">
         <div class="overflow-x-auto">
-            <table class="w-full text-sm text-left text-gray-500">
+            {{-- PERUBAHAN: text-left diubah menjadi text-center --}}
+            <table class="w-full text-sm text-center text-gray-500">
                 <thead class="text-xs text-gray-700 uppercase bg-gray-50">
                     <tr>
-                        <th scope="col" class="px-6 py-3">No</th>
-                        <th scope="col" class="px-6 py-3">Jenis Permohonan</th>
-                        <th scope="col" class="px-6 py-3">Tanggal Pengajuan</th>
-                        <th scope="col" class="px-6 py-3">Status</th>
-                        <th scope="col" class="px-6 py-3">Berkas</th>
-                        <th scope="col" class="px-6 py-3">Aksi</th>
+                        {{-- PERUBAHAN: Menambahkan text-center pada setiap th --}}
+                        <th scope="col" class="px-6 py-3 text-center">No</th>
+                        <th scope="col" class="px-6 py-3 text-center">Jenis Permohonan</th>
+                        <th scope="col" class="px-6 py-3 text-center">Tanggal Pengajuan</th>
+                        <th scope="col" class="px-6 py-3 text-center">Status</th>
+                        <th scope="col" class="px-6 py-3 text-center">Berkas</th>
+                        <th scope="col" class="px-6 py-3 text-center">Aksi</th>
                     </tr>
                 </thead>
                 <tbody>
                     @forelse($permohonans as $permohonan)
                     <tr class="bg-white border-b hover:bg-gray-50">
-                        <td class="px-6 py-4">{{ $loop->iteration + ($permohonans->currentPage() - 1) * $permohonans->perPage() }}</td>
-                        <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">{{ $permohonan->service->name }}</td>
-                        <td class="px-6 py-4">{{ $permohonan->created_at->format('d F Y') }}</td>
-                        <td class="px-6 py-4">
+                        {{-- PERUBAHAN: Menambahkan text-center pada setiap td --}}
+                        <td class="px-6 py-4 text-center">{{ $loop->iteration + ($permohonans->currentPage() - 1) * $permohonans->perPage() }}</td>
+                        <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap text-center">{{ $permohonan->service->name }}</td>
+                        <td class="px-6 py-4 text-center">{{ $permohonan->created_at->format('d F Y') }}</td>
+                        <td class="px-6 py-4 text-center">
                             <span class="px-2 py-1 text-xs font-semibold rounded-full {{-- ... kelas badge status ... --}}">
                                 {{ $permohonan->status }}
                             </span>
                         </td>
-                        <td class="px-6 py-4">
-                            <a href="{{ Storage::url($permohonan->file_path) }}" target="_blank" class="font-medium text-blue-600 hover:underline">Lihat Berkas</a>
+                        <td class="px-6 py-4 text-center">
+                            <a href="{{ asset('storage/' . $permohonan->file_path) }}" target="_blank" class="font-medium text-blue-600 hover:underline">
+                                Lihat Berkas
+                            </a>
                         </td>
-                        <td class="px-6 py-4">
-                            {{-- Tombol hanya muncul jika status 'Kurang Berkas' --}}
+                        <td class="px-6 py-4 text-center">
                             @if ($permohonan->status == 'Kurang Berkas')
                                 <a href="{{ route('klien.permohonan.reupload.form', $permohonan) }}" class="font-medium text-red-600 hover:underline">Lengkapi Berkas</a>
                             @else
